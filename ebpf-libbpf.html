@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Learn how to write an eBPF program using the libbpf framework to trace NVMe driver data structures.">
+  <meta name="keywords" content="eBPF, libbpf, NVMe, Linux kernel, CO-RE, tracing">
+  <meta property="og:title" content="Kernelize - eBPF Program Using the libbpf Framework">
+  <meta property="og:description" content="Learn how to write an eBPF program using the libbpf framework to trace NVMe driver data structures.">
+  <meta property="og:url" content="https://your-site-url.com/ebpf-libbpf.html">
+  <meta property="og:type" content="article">
+  <link rel="icon" href="images/favicon.ico" type="image/x-icon">
+  <link rel="shortcut icon" href="images/favicon.ico" type="image/x-icon">
+  <title>eBPF Program Using the libbpf Framework</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.0/styles/atom-one-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.0/highlight.min.js"></script>
+  <script>hljs.highlightAll();</script>
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="container">
+      <a href="index.html" class="logo">
+        <img src="images/logo.svg" alt="Kernelize Logo">
+        <span class="logo-text">Kernelize</span>
+      </a>
+      <button class="menu-toggle" aria-label="Toggle navigation">
+        <span class="hamburger"></span>
+      </button>
+      <nav class="nav">
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="about.html">About</a></li>
+          <li><a href="contact.html">Contact</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Article Section -->
+  <section class="article">
+    <div class="container">
+      <h1>eBPF Program Using the libbpf Framework</h1>
+
+      <h2>Introduction</h2>
+      <p>In order to make eBPF programs portable across different versions of the Kernel, we have to write our eBPF programs using the CO-RE approach (compile once, run everywhere). CO-RE allows eBPF programs to include information about the layout of data structures they were compiled with, and has a mechanism for adjusting how fields (members) are accessed in the data structure layout. The Linux Kernel source code headers can change between versions of Linux and an eBPF program can include several individual header files, but we can also use bpftool to generate vmlinux.h header file from a running system containing all the data structure information of the Kernel that an eBPF program might need to use.</p>
+      <p>There are a few libraries that take care of the CO-RE relocation capability, and libbpf being the original C library takes care of this relocation capability.</p>
+      <p>We use the Clang compiler with the "-g" flag to compile eBPF programs, and Clang includes the CO-RE relocations, derived from the BTF information describing the Kernel data structures. BTF (BPF Type Format) is a format for expressing the layout of data structures and functions signatures; in CO-RE this is used to determine the differences between structures used at compile time and structures present on the system's Kernel during runtime, because data structures might be different when the eBPF program was compiled on a system with a certain Kernel version from the layout of data structures (having same name) available on the system with another Kernel version where we intend to run the eBPF program, that be build earlier on the other system.</p>
+      <p>When a user space program loads an eBPF program into the Kernel, the CO-RE mechanism requires the bytecode to be adjusted, using the CO-RE relocation information compiled into the object, in order to compensate the differences of data structure layout between data structures that were present when the eBPF program was compiled and data structures that are currently available on the machine where we are running the eBPF program.</p>
+
+      <h2>Cloning the Lunar Kernel</h2>
+      <p>Clone the Lunar Kernel:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">git clone https://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/lunar</code></pre>
+      </div>
+      <p>Search needed NVMe Kernel driver function definitions and data structures.</p>
+
+      <h2>Analyzing the nvme_submit_user_cmd Function</h2>
+      <p>Now let's see in the Kernel code how does the "nvme_submit_user_cmd" function definition look like, what arguments does it have and what can we extract from these arguments which are passed to the "nvme_submit_user_cmd" function.</p>
+      <p>We can see in the Kernel source that it has a number of arguments and the second argument is a pointer of type "struct nvme_command":</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">c</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-c">grep -rnI " nvme_submit_user_cmd(" lunar/
+
+lunar/drivers/nvme/host/ioctl.c:141
+
+static int nvme_submit_user_cmd(struct request_queue *q,
+                struct nvme_command *cmd, u64 ubuffer,
+                unsigned bufflen, void __user *meta_buffer, unsigned meta_len,
+                u32 meta_seed, u64 *result, unsigned timeout, bool vec)
+{</code></pre>
+      </div>
+      <p>Let's check what members does the "struct nvme_command" have?</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">c</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-c">grep -rnI "struct nvme_command {" lunar/
+
+lunar/include/linux/nvme.h:1740
+
+struct nvme_command {
+        union {
+                struct nvme_common_command common;
+                struct nvme_rw_command rw;
+                struct nvme_identify identify;
+                struct nvme_features features;
+                struct nvme_create_cq create_cq;
+                struct nvme_create_sq create_sq;
+                struct nvme_delete_queue delete_queue;
+                struct nvme_download_firmware dlfw;
+                struct nvme_format_cmd format;
+                struct nvme_dsm_cmd dsm;
+                struct nvme_write_zeroes_cmd write_zeroes;
+                struct nvme_zone_mgmt_send_cmd zms;
+                struct nvme_zone_mgmt_recv_cmd zmr;
+                struct nvme_abort_cmd abort;
+                struct nvme_get_log_page_command get_log_page;
+                struct nvmf_common_command fabrics;
+                struct nvmf_connect_command connect;
+                struct nvmf_property_set_command prop_set;
+                struct nvmf_property_get_command prop_get;
+                struct nvmf_auth_common_command auth_common;
+                struct nvmf_auth_send_command auth_send;
+                struct nvmf_auth_receive_command auth_receive;
+                struct nvme_dbbuf dbbuf;
+                struct nvme_directive_cmd directive;
+        };
+};</code></pre>
+      </div>
+      <p>Within "struct nvme_command" we would like to access the "struct nvme_common_command common" member. Now let's check the layout of the "struct nvme_common_command" data structure in the Kernel source code:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">c</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-c">grep -rnI "struct nvme_common_command {" lunar/
+
+lunar/include/linux/nvme.h:907
+
+struct nvme_common_command {
+        __u8                    opcode;
+        __u8                    flags;
+        __u16                   command_id;
+        __le32                  nsid;
+        __le32                  cdw2[2];
+        __le64                  metadata;
+        union nvme_data_ptr     dptr;
+        struct_group(cdws,
+        __le32                  cdw10;
+        __le32                  cdw11;
+        __le32                  cdw12;
+        __le32                  cdw13;
+        __le32                  cdw14;
+        __le32                  cdw15;
+        );
+};</code></pre>
+      </div>
+      <p>"struct nvme_common_command" has this "opcode" member plus a number of other members like command_id, nsid (Namespace ID), cdw10 (Command Dword 10 is an NVMe command specific field) which values we want to trace with our eBPF program.</p>
+
+      <h2>Setting Up the Development Environment</h2>
+      <p>Clone the libbpf-bootstrap repository and submodules and install dependencies:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo apt install clang libelf1 libelf-dev zlib1g-dev</code></pre>
+      </div>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">git clone --recurse-submodules https://github.com/libbpf/libbpf-bootstrap</code></pre>
+      </div>
+      <p>This will also clone the submodule repositories:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">text</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-text">https://github.com/libbpf/blazesym
+https://github.com/libbpf/bpftool
+https://github.com/libbpf/libbpf</code></pre>
+      </div>
+      <p>Create eBPF program development directory and copy here all the utility files and directories from libbpf-bootstrap:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">mkdir nvme_ebpf
+cd nvme_ebpf</code></pre>
+      </div>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">cp -r ../libbpf-bootstrap/{blazesym,bpftool,libbpf} .
+cp ../libbpf-bootstrap/examples/c/Makefile .</code></pre>
+      </div>
+      <p>The eBPF program needs the definitions of any kernel data structures and types that it is going to refer to. BTF-enabled tools like "bpftool" can generate an appropriate header file from the BTF information included in the kernel, and this file is conventionally called vmlinux.h, this vmlinux.h file defines all the kernel's data types:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h</code></pre>
+      </div>
+      <p>When you compile the source into an eBPF object file, that object will include BTF information that matches the definitions used in this header file. Later, when the program is run on a target machine, the user space program that loads it into the kernel will make adjustments to account for differences between this build-time BTF information and the BTF information for the kernel that's running on that target machine.</p>
+
+      <h2>Modifying the Makefile</h2>
+      <p>Modify the Makefile you copied from "libbpf-bootstrap/examples/c/Makefile" according to the below patch:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">diff</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-diff">--- ~/libbpf-bootstrap/examples/c/Makefile	2023-09-08 10:52:53.242558117 +0200
++++ Makefile	2023-09-08 11:42:08.759224020 +0200
+@@ -1,12 +1,12 @@
+ # SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
+ OUTPUT := .output
+ CLANG ?= clang
+-LIBBPF_SRC := $(abspath ../../libbpf/src)
+-BPFTOOL_SRC := $(abspath ../../bpftool/src)
++LIBBPF_SRC := $(abspath libbpf/src)
++BPFTOOL_SRC := $(abspath bpftool/src)
+ LIBBPF_OBJ := $(abspath $(OUTPUT)/libbpf.a)
+ BPFTOOL_OUTPUT ?= $(abspath $(OUTPUT)/bpftool)
+ BPFTOOL ?= $(BPFTOOL_OUTPUT)/bootstrap/bpftool
+-LIBBLAZESYM_SRC := $(abspath ../../blazesym/)
++LIBBLAZESYM_SRC := $(abspath blazesym/)
+ LIBBLAZESYM_INC := $(abspath $(LIBBLAZESYM_SRC)/include)
+ LIBBLAZESYM_OBJ := $(abspath $(OUTPUT)/libblazesym.a)
+ ARCH ?= $(shell uname -m | sed 's/x86_64/x86/' \
+@@ -16,15 +16,16 @@
+              | sed 's/mips.*/mips/' \
+              | sed 's/riscv64/riscv/' \
+              | sed 's/loongarch64/loongarch/')
+-VMLINUX := ../../vmlinux/$(ARCH)/vmlinux.h
++#VMLINUX := ../../vmlinux/$(ARCH)/vmlinux.h
++VMLINUX := vmlinux.h
+ # Use our own libbpf API headers and Linux UAPI headers distributed with
+ # libbpf to avoid dependency on system-wide headers, which could be missing or
+ # outdated
+-INCLUDES := -I$(OUTPUT) -I../../libbpf/include/uapi -I$(dir $(VMLINUX)) -I$(LIBBLAZESYM_INC)
++INCLUDES := -I$(OUTPUT) -Ilibbpf/include/uapi -I$(dir $(VMLINUX)) -I$(LIBBLAZESYM_INC)
+ CFLAGS := -g -Wall
+ ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
+ 
+-APPS = minimal minimal_legacy bootstrap uprobe kprobe fentry usdt sockfilter tc ksyscall
++APPS = nvme_trace
+ 
+ CARGO ?= $(shell which cargo)
+ ifeq ($(strip $(CARGO)),)</code></pre>
+      </div>
+      <p>The final version of the Makefile will look like this:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">makefile</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-makefile">vi Makefile
+-----------------------------------------------------------------------------------------------
+# SPDX-License-Identifier: (LGPL-2.1 OR BSD-2-Clause)
+OUTPUT := .output
+CLANG ?= clang
+LIBBPF_SRC := $(abspath libbpf/src)
+BPFTOOL_SRC := $(abspath bpftool/src)
+LIBBPF_OBJ := $(abspath $(OUTPUT)/libbpf.a)
+BPFTOOL_OUTPUT ?= $(abspath $(OUTPUT)/bpftool)
+BPFTOOL ?= $(BPFTOOL_OUTPUT)/bootstrap/bpftool
+LIBBLAZESYM_SRC := $(abspath blazesym/)
+LIBBLAZESYM_INC := $(abspath $(LIBBLAZESYM_SRC)/include)
+LIBBLAZESYM_OBJ := $(abspath $(OUTPUT)/libblazesym.a)
+ARCH ?= $(shell uname -m | sed 's/x86_64/x86/' \
+             | sed 's/arm.*/arm/' \
+             | sed 's/aarch64/arm64/' \
+             | sed 's/ppc64le/powerpc/' \
+             | sed 's/mips.*/mips/' \
+             | sed 's/riscv64/riscv/' \
+             | sed 's/loongarch64/loongarch/')
+#VMLINUX := ../../vmlinux/$(ARCH)/vmlinux.h
+VMLINUX := vmlinux.h
+# Use our own libbpf API headers and Linux UAPI headers distributed with
+# libbpf to avoid dependency on system-wide headers, which could be missing or
+# outdated
+INCLUDES := -I$(OUTPUT) -Ilibbpf/include/uapi -I$(dir $(VMLINUX)) -I$(LIBBLAZESYM_INC)
+CFLAGS := -g -Wall
+ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
+
+APPS = nvme_trace
+
+CARGO ?= $(shell which cargo)
+ifeq ($(strip $(CARGO)),)
+BZS_APPS :=
+else
+BZS_APPS := profile
+APPS += $(BZS_APPS)
+# Required by libblazesym
+ALL_LDFLAGS += -lrt -ldl -lpthread -lm
+endif
+
+# Get Clang's default includes on this system. We'll explicitly add these dirs
+# to the includes list when compiling with `-target bpf` because otherwise some
+# architecture-specific dirs will be "missing" on some architectures/distros -
+# headers such as asm/types.h, asm/byteorder.h, asm/socket.h, asm/sockios.h,
+# sys/cdefs.h etc. might be missing.
+#
+# Use '-idirafter': Don't interfere with include mechanics except where the
+# build would have failed anyways.
+CLANG_BPF_SYS_INCLUDES ?= $(shell $(CLANG) -v -E - </dev/null 2>&1 \
+    | sed -n '/<...> search starts here:/,/End of search list./{ s| \(/.*\)|-idirafter \1|p }')
+
+ifeq ($(V),1)
+    Q =
+    msg =
+else
+    Q = @
+    msg = @printf '  %-8s %s%s\n'					\
+              "$(1)"						\
+              "$(patsubst $(abspath $(OUTPUT))/%,%,$(2))"	\
+              "$(if $(3), $(3))";
+    MAKEFLAGS += --no-print-directory
+endif
+
+define allow-override
+  $(if $(or $(findstring environment,$(origin $(1))),\
+            $(findstring command line,$(origin $(1)))),,\
+    $(eval $(1) = $(2)))
+endef
+
+$(call allow-override,CC,$(CROSS_COMPILE)cc)
+$(call allow-override,LD,$(CROSS_COMPILE)ld)
+
+.PHONY: all
+all: $(APPS)
+
+.PHONY: clean
+clean:
+    $(call msg,CLEAN)
+    $(Q)rm -rf $(OUTPUT) $(APPS)
+
+$(OUTPUT) $(OUTPUT)/libbpf $(BPFTOOL_OUTPUT):
+    $(call msg,MKDIR,$@)
+    $(Q)mkdir -p $@
+
+# Build libbpf
+$(LIBBPF_OBJ): $(wildcard $(LIBBPF_SRC)/*.[ch] $(LIBBPF_SRC)/Makefile) | $(OUTPUT)/libbpf
+    $(call msg,LIB,$@)
+    $(Q)$(MAKE) -C $(LIBBPF_SRC) BUILD_STATIC_ONLY=1		      \
+            OBJDIR=$(dir $@)/libbpf DESTDIR=$(dir $@)		      \
+            INCLUDEDIR= LIBDIR= UAPIDIR=			      \
+            install
+
+# Build bpftool
+$(BPFTOOL): | $(BPFTOOL_OUTPUT)
+    $(call msg,BPFTOOL,$@)
+    $(Q)$(MAKE) ARCH= CROSS_COMPILE= OUTPUT=$(BPFTOOL_OUTPUT)/ -C $(BPFTOOL_SRC) bootstrap
+
+
+$(LIBBLAZESYM_SRC)/target/release/libblazesym.a::
+    $(Q)cd $(LIBBLAZESYM_SRC) && $(CARGO) build --release
+
+$(LIBBLAZESYM_OBJ): $(LIBBLAZESYM_SRC)/target/release/libblazesym.a | $(OUTPUT)
+    $(call msg,LIB, $@)
+    $(Q)cp $(LIBBLAZESYM_SRC)/target/release/libblazesym.a $@
+
+# Build BPF code
+$(OUTPUT)/%.bpf.o: %.bpf.c $(LIBBPF_OBJ) $(wildcard %.h) $(VMLINUX) | $(OUTPUT) $(BPFTOOL)
+    $(call msg,BPF,$@)
+    $(Q)$(CLANG) -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH)		      \
+             $(INCLUDES) $(CLANG_BPF_SYS_INCLUDES)		      \
+             -c $(filter %.c,$^) -o $(patsubst %.bpf.o,%.tmp.bpf.o,$@)
+    $(Q)$(BPFTOOL) gen object $@ $(patsubst %.bpf.o,%.tmp.bpf.o,$@)
+
+# Generate BPF skeletons
+$(OUTPUT)/%.skel.h: $(OUTPUT)/%.bpf.o | $(OUTPUT) $(BPFTOOL)
+    $(call msg,GEN-SKEL,$@)
+    $(Q)$(BPFTOOL) gen skeleton $< > $@
+
+# Build user-space code
+$(patsubst %,$(OUTPUT)/%.o,$(APPS)): %.o: %.skel.h
+
+$(OUTPUT)/%.o: %.c $(wildcard %.h) | $(OUTPUT)
+    $(call msg,CC,$@)
+    $(Q)$(CC) $(CFLAGS) $(INCLUDES) -c $(filter %.c,$^) -o $@
+
+$(patsubst %,$(OUTPUT)/%.o,$(BZS_APPS)): $(LIBBLAZESYM_OBJ)
+
+$(BZS_APPS): $(LIBBLAZESYM_OBJ)
+
+# Build application binary
+$(APPS): %: $(OUTPUT)/%.o $(LIBBPF_OBJ) | $(OUTPUT)
+    $(call msg,BINARY,$@)
+    $(Q)$(CC) $(CFLAGS) $^ $(ALL_LDFLAGS) -lelf -lz -o $@
+
+# delete failed targets
+.DELETE_ON_ERROR:
+
+# keep intermediate (.skel.h, .bpf.o, etc) targets
+.SECONDARY:
+-----------------------------------------------------------------------------------------------</code></pre>
+      </div>
+
+      <h2>Writing the User Space Application</h2>
+      <p>Now write the C application which will load the eBPF program into the Kernel:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">c</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-c">vi nvme_trace.c
+-----------------------------------------------------------------------------------------------
+#include <stdio.h>
+#include <unistd.h>
+#include <signal.h>
+#include <string.h>
+#include <errno.h>
+#include <sys/resource.h>
+#include <bpf/libbpf.h>
+#include "nvme_trace.skel.h"
+
+static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va_list args)
+{
+    return vfprintf(stderr, format, args);
+}
+
+static volatile sig_atomic_t stop;
+
+static void sig_int(int signo)
+{
+    stop = 1;
+}
+
+int main(int argc, char **argv)
+{
+    struct nvme_trace_bpf *skel;
+    int err;
+
+    /* Set up libbpf errors and debug info callback */
+    libbpf_set_print(libbpf_print_fn);
+
+    /* Open load and verify BPF application */
+    skel = nvme_trace_bpf__open_and_load();
+    if (!skel) {
+        fprintf(stderr, "Failed to open BPF skeleton\n");
+        return 1;
+    }
+
+    /* Attach tracepoint handler */
+    err = nvme_trace_bpf__attach(skel);
+    if (err) {
+        fprintf(stderr, "Failed to attach BPF skeleton\n");
+        goto cleanup;
+    }
+
+    if (signal(SIGINT, sig_int) == SIG_ERR) {
+        fprintf(stderr, "can't set signal handler: %s\n", strerror(errno));
+        goto cleanup;
+    }
+
+    printf("Successfully started! Please run `sudo cat /sys/kernel/debug/tracing/trace_pipe` "
+           "to see output of the BPF programs.\n");
+
+    while (!stop) {
+        fprintf(stderr, ".");
+        sleep(1);
+    }
+
+cleanup:
+    nvme_trace_bpf__destroy(skel);
+    return -err;
+}
+-----------------------------------------------------------------------------------------------
+</code></pre>
+      </div>
+
+      <h2>Writing the eBPF Program</h2>
+      <p>Now write the eBPF program:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">c</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-c">vi nvme_trace.bpf.c
+-----------------------------------------------------------------------------------------------
+#include "vmlinux.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+#include <linux/stddef.h>
+#include "nvme_trace.h"
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";
+
+SEC("kprobe/nvme_submit_user_cmd")
+int BPF_KPROBE(do_nvme_submit_user_cmd, void *q, struct nvme_command *cmd)
+{
+    pid_t pid;
+    char comm[16];
+    __u8  opcode;
+    __u16 command_id;
+    __le32 nsid;
+    __le32 cdw10;
+
+    pid = bpf_get_current_pid_tgid() >> 32;
+
+    bpf_get_current_comm(&comm, sizeof(comm));
+ 
+    opcode = BPF_CORE_READ(cmd, common.opcode);
+    command_id = BPF_CORE_READ(cmd, common.command_id);
+    nsid = BPF_CORE_READ(cmd, common.nsid);
+    cdw10 = BPF_CORE_READ(cmd, common.cdws.cdw10);
+
+    /*
+    // __________ALTERNATIVE____________
+    struct nvme_common_command common = {};
+    bpf_core_read(&common, sizeof(common), &cmd->common);
+    bpf_core_read(&opcode, sizeof(opcode), &common.opcode);
+    bpf_core_read(&command_id, sizeof(command_id), &common.command_id);
+    bpf_core_read(&nsid, sizeof(nsid), &common.nsid);
+    bpf_core_read(&cdw10, sizeof(cdw10), &common.cdws.cdw10);
+    */
+
+    bpf_printk("KPROBE ENTRY pid = %d, comm = %s, opcode = %x, command_id = %x, nsid = %x, cdw10 = %x", 
+               pid, comm, opcode, command_id, nsid, cdw10);
+
+    return 0;
+}
+-----------------------------------------------------------------------------------------------
+</code></pre>
+      </div>
+
+      <h2>Creating Additional Header File</h2>
+      <p>Also create this extra header file which will include some of the needed NVMe Kernel driver data structure declarations that we extracted from the Kernel source:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">c</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-c">vi nvme_trace.h
+-----------------------------------------------------------------------------------------------
+#define struct_group(NAME, MEMBERS...)  \
+        __struct_group(/* no tag */, NAME, /* no attrs */, MEMBERS)
+
+
+struct nvme_sgl_desc {
+        __le64  addr;
+        __le32  length;
+        __u8    rsvd[3];
+        __u8    type;
+} __attribute__((preserve_access_index));
+
+struct nvme_keyed_sgl_desc {
+        __le64  addr;
+        __u8    length[3];
+        __u8    key[4];
+        __u8    type;
+} __attribute__((preserve_access_index));
+
+union nvme_data_ptr {
+        struct {
+                __le64  prp1;
+                __le64  prp2;
+        };
+        struct nvme_sgl_desc    sgl;
+        struct nvme_keyed_sgl_desc ksgl;
+} __attribute__((preserve_access_index));
+
+struct nvme_common_command {
+        __u8                    opcode;
+        __u8                    flags;
+        __u16                   command_id;
+        __le32                  nsid;
+        __le32                  cdw2[2];
+        __le64                  metadata;
+        union nvme_data_ptr     dptr;
+        struct_group(cdws,
+        __le32                  cdw10;
+        __le32                  cdw11;
+        __le32                  cdw12;
+        __le32                  cdw13;
+        __le32                  cdw14;
+        __le32                  cdw15;
+        ) __attribute__((preserve_access_index));
+} __attribute__((preserve_access_index));
+
+
+struct nvme_command {
+    union {
+        struct nvme_common_command common;
+    };
+} __attribute__((preserve_access_index));
+-----------------------------------------------------------------------------------------------
+</code></pre>
+      </div>
+
+      <h2>Directory Structure</h2>
+      <p>At this moment this is the content of our eBPF development directory will look as shown below:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">~/nvme_ebpf$ ls
+blazesym  bpftool  libbpf  Makefile  nvme_trace.bpf.c  nvme_trace.c  vmlinux.h</code></pre>
+      </div>
+
+      <h2>Compiling the Program</h2>
+      <p>Now lets compile the eBPF program and userspace loading program with "make all":</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">make all
+
+  MKDIR    .output
+  MKDIR    .output/libbpf
+  LIB      libbpf.a
+  MKDIR    /home/zilard/nvme_ebpf/.output//libbpf/staticobjs
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/bpf.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/btf.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/libbpf.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/libbpf_errno.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/netlink.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/nlattr.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/str_error.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/libbpf_probes.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/bpf_prog_linfo.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/btf_dump.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/hashmap.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/ringbuf.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/strset.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/linker.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/gen_loader.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/relo_core.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/usdt.o
+  CC       /home/zilard/nvme_ebpf/.output//libbpf/staticobjs/zip.o
+  AR       /home/zilard/nvme_ebpf/.output//libbpf/libbpf.a
+  INSTALL  bpf.h libbpf.h btf.h libbpf_common.h libbpf_legacy.h bpf_helpers.h bpf_helper_defs.h bpf_tracing.h bpf_endian.h bpf_core_read.h skel_internal.h libbpf_version.h usdt.bpf.h
+  INSTALL  /home/zilard/nvme_ebpf/.output//libbpf/libbpf.pc
+  INSTALL  /home/zilard/nvme_ebpf/.output//libbpf/libbpf.a 
+  MKDIR    bpftool
+  BPFTOOL  bpftool/bootstrap/bpftool
+...                        libbfd: [ on  ]
+...               clang-bpf-co-re: [ on  ]
+...                          llvm: [ on  ]
+...                        libcap: [ OFF ]
+  MKDIR    /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/include/bpf
+  INSTALL  /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/include/bpf/hashmap.h
+  INSTALL  /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/include/bpf/relo_core.h
+  INSTALL  /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/include/bpf/libbpf_internal.h
+  MKDIR    /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/
+  MKDIR    /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/
+  MKDIR    /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/bpf.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/btf.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/libbpf.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/libbpf_errno.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/netlink.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/nlattr.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/str_error.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/libbpf_probes.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/bpf_prog_linfo.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/btf_dump.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/hashmap.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/ringbuf.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/strset.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/linker.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/gen_loader.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/relo_core.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/staticobjs/usdt.o
+  AR       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/libbpf/libbpf.a
+  INSTALL  bpf.h libbpf.h btf.h libbpf_common.h libbpf_legacy.h bpf_helpers.h bpf_helper_defs.h bpf_tracing.h bpf_endian.h bpf_core_read.h skel_internal.h libbpf_version.h usdt.bpf.h
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/main.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/common.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/json_writer.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/gen.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/btf.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/xlated_dumper.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/btf_dumper.o
+  CC       /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/disasm.o
+  LINK     /home/zilard/nvme_ebpf/.output/bpftool/bootstrap/bpftool
+  BPF      .output/nvme_trace.bpf.o
+  GEN-SKEL .output/nvme_trace.skel.h
+  CC       .output/nvme_trace.o
+  BINARY   nvme_trace</code></pre>
+      </div>
+      <p>If the compilation was successful we are going to see the "nvme_trace" created in our directory and a hidden directory called ".output":</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">~/nvme_ebpf$ ls
+blazesym  bpftool  libbpf  Makefile  nvme_trace  nvme_trace.bpf.c  nvme_trace.c  vmlinux.h   .output</code></pre>
+      </div>
+      <p>The eBPF program object file "nvme_trace.bpf.o" is found in the .output hidden folder, and also a bunch of eBPF header files and libbpf object files:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">~/nvme_ebpf$ ls -a .output/
+.   bpf      libbpf    nvme_trace.bpf.o  nvme_trace.skel.h     pkgconfig
+..  bpftool  libbpf.a  nvme_trace.o      nvme_trace.tmp.bpf.o
+
+~/nvme_ebpf$ ls -a .output/pkgconfig/
+.  ..  libbpf.pc
+
+~/nvme_ebpf$ ls -a .output/bpf
+.                bpf.h              btf.h            libbpf_version.h
+..               bpf_helper_defs.h  libbpf_common.h  skel_internal.h
+bpf_core_read.h  bpf_helpers.h      libbpf.h         usdt.bpf.h
+bpf_endian.h     bpf_tracing.h      libbpf_legacy.h
+
+~/nvme_ebpf$ ls -a .output/libbpf
+.  ..  libbpf.a  libbpf.pc  staticobjs
+
+~/nvme_ebpf$ ls -a .output/libbpf/staticobjs/
+.                 btf_dump.o    libbpf_errno.o   netlink.o    str_error.o
+..                btf.o         libbpf.o         nlattr.o     strset.o
+bpf.o             gen_loader.o  libbpf_probes.o  relo_core.o  usdt.o
+bpf_prog_linfo.o  hashmap.o     linker.o         ringbuf.o    zip.o
+
+~/nvme_ebpf$ ls -a .output/bpftool/
+.  ..  bootstrap
+
+~/nvme_ebpf$ ls -a .output/bpftool/bootstrap/
+.        btf_dumper.d  common.o  gen.o          main.d
+..       btf_dumper.o  disasm.d  json_writer.d  main.o
+bpftool  btf.o         disasm.o  json_writer.o  xlated_dumper.d
+btf.d    common.d      gen.d     libbpf         xlated_dumper.o</code></pre>
+      </div>
+
+      <h2>Running the Program</h2>
+      <p>Now lets run the eBPF loading application which loads the eBPF program into the Kernel:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo ./nvme_trace 
+libbpf: loading object 'nvme_trace_bpf' from buffer
+libbpf: elf: section(2) .symtab, size 168, link 1, flags 0, type=2
+libbpf: elf: section(3) kprobe/nvme_submit_user_cmd, size 472, link 0, flags 6, type=1
+libbpf: sec 'kprobe/nvme_submit_user_cmd': found program 'do_nvme_submit_user_cmd' at insn offset 0 (0 bytes), code size 59 insns (472 bytes)
+libbpf: elf: section(4) license, size 13, link 0, flags 3, type=1
+libbpf: license of nvme_trace_bpf is Dual BSD/GPL
+libbpf: elf: section(5) .rodata, size 86, link 0, flags 2, type=1
+libbpf: elf: section(6) .relkprobe/nvme_submit_user_cmd, size 16, link 2, flags 40, type=9
+libbpf: elf: section(7) .BTF, size 2334, link 0, flags 0, type=1
+libbpf: elf: section(8) .BTF.ext, size 492, link 0, flags 0, type=1
+libbpf: looking for externs among 7 symbols...
+libbpf: collected 0 externs total
+libbpf: map 'nvme_tra.rodata' (global data): at sec_idx 5, offset 0, flags 80.
+libbpf: map 0 is "nvme_tra.rodata"
+libbpf: sec '.relkprobe/nvme_submit_user_cmd': collecting relocation for section(3) 'kprobe/nvme_submit_user_cmd'
+libbpf: sec '.relkprobe/nvme_submit_user_cmd': relo #0: insn #52 against '.rodata'
+libbpf: prog 'do_nvme_submit_user_cmd': found data map 0 (nvme_tra.rodata, sec 5, off 0) for insn 52
+libbpf: loading kernel BTF '/sys/kernel/btf/vmlinux': 0
+libbpf: map 'nvme_tra.rodata': created successfully, fd=4
+libbpf: sec 'kprobe/nvme_submit_user_cmd': found 5 CO-RE relocations
+libbpf: CO-RE relocating [2] struct pt_regs: found target candidate [184] struct pt_regs in [vmlinux]
+libbpf: prog 'do_nvme_submit_user_cmd': relo #0: <byte_off> [2] struct pt_regs.si (0:13 @ offset 104)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #0: matching candidate #0 <byte_off> [184] struct pt_regs.si (0:13 @ offset 104)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #0: patched insn #0 (LDX/ST/STX) off 104 -> 104
+libbpf: CO-RE relocating [7] struct nvme_command: found target candidate [127897] struct nvme_command in [nvme_core]
+libbpf: CO-RE relocating [7] struct nvme_command: found target candidate [127890] struct nvme_command in [nvme]
+libbpf: prog 'do_nvme_submit_user_cmd': relo #1: <byte_off> [7] struct nvme_command.common.opcode (0:0:0:0 @ offset 0)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #1: matching candidate #0 <byte_off> [127897] struct nvme_command.common.opcode (0:0:0:0 @ offset 0)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #1: matching candidate #1 <byte_off> [127890] struct nvme_command.common.opcode (0:0:0:0 @ offset 0)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #1: patched insn #8 (ALU/ALU64) imm 0 -> 0
+libbpf: prog 'do_nvme_submit_user_cmd': relo #2: <byte_off> [7] struct nvme_command.common.command_id (0:0:0:2 @ offset 2)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #2: matching candidate #0 <byte_off> [127897] struct nvme_command.common.command_id (0:0:0:2 @ offset 2)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #2: matching candidate #1 <byte_off> [127890] struct nvme_command.common.command_id (0:0:0:2 @ offset 2)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #2: patched insn #15 (ALU/ALU64) imm 2 -> 2
+libbpf: prog 'do_nvme_submit_user_cmd': relo #3: <byte_off> [7] struct nvme_command.common.nsid (0:0:0:3 @ offset 4)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #3: matching candidate #0 <byte_off> [127897] struct nvme_command.common.nsid (0:0:0:3 @ offset 4)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #3: matching candidate #1 <byte_off> [127890] struct nvme_command.common.nsid (0:0:0:3 @ offset 4)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #3: patched insn #24 (ALU/ALU64) imm 4 -> 4
+libbpf: prog 'do_nvme_submit_user_cmd': relo #4: <byte_off> [7] struct nvme_command.common.cdws.cdw10 (0:0:0:7:1:0 @ offset 40)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #4: matching candidate #0 <byte_off> [127897] struct nvme_command.common.cdws.cdw10 (0:0:0:7:1:0 @ offset 40)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #4: matching candidate #1 <byte_off> [127890] struct nvme_command.common.cdws.cdw10 (0:0:0:7:1:0 @ offset 40)
+libbpf: prog 'do_nvme_submit_user_cmd': relo #4: patched insn #32 (ALU/ALU64) imm 40 -> 40
+Successfully started! Please run `sudo cat /sys/kernel/debug/tracing/trace_pipe` to see output of the BPF programs.
+...........................................</code></pre>
+      </div>
+      <p>We're using bpf_printk to print a message in the kernel tracing log, you can find this log in /sys/kernel/debug/tracing/trace_pipe. bpf_printk() helper function in the kernel always sends output to the same predefined pseudofile location: /sys/kernel/debug/tracing/trace_pipe. You need root privileges to access and continue reading the content of this file.</p>
+      <p>We have to install nvme-cli so we can trigger the invocation of this "nvme_submit_user_cmd" kernel function.</p>
+      <p>Now let's install nvme-cli in order to send an admin command to one of the NVME SSD devices:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo apt install nvme-cli</code></pre>
+      </div>
+
+      <h2>Testing the Program</h2>
+      <p>As soon as we start executing the nvme-cli tool to list NVMe devices on the system:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo nvme list
+
+Node                  Generic               SN                   Model                                    Namespace Usage                      Format           FW Rev  
+--------------------- --------------------- -------------------- ---------------------------------------- --------- -------------------------- ---------------- --------
+/dev/nvme0n1          /dev/ng0n1            S4DYNX0R756769       SAMSUNG MZVLB512HBJQ-000L2               1          93.20  GB / 512.11  GB    512   B +  0 B   3L1QEXF7
+</code></pre>
+      </div>
+      <p>The "nvme_submit_user_cmd" function is invoked in the NVMe Kernel driver level, and the kprobe attached by our eBPF program will trace the NVMe data structure members that we are hooked onto, opcode, command-id, nsid, cdw10.</p>
+      <p>This means that the nvme-cli tool triggers the "nvme_submit_user_cmd" nvme kernel driver function 2 times, same opcode, 0x6 (HEX) which in terms of NVMe admin commands it means "Identify":</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">text</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-text">sudo cat /sys/kernel/debug/tracing/trace_pipe
+
+            nvme-4943    [010] d..31  1967.763968: bpf_trace_printk: KPROBE ENTRY pid = 4943, comm = nvme, opcode = 6, command_id = 0, nsid = 1, cdw10 = 0
+            nvme-4943    [010] d..31  1967.764521: bpf_trace_printk: KPROBE ENTRY pid = 4943, comm = nvme, opcode = 6, command_id = 0, nsid = 1, cdw10 = 3
+</code></pre>
+      </div>
+      <p>Now let's run an NVME admin passthru command to trigger a short device self-test in the NVME SSD:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo nvme admin-passthru /dev/nvme0 -n 0x1 --opcode=0x14 --cdw10=0x1 -r
+Admin Command Device Self-test is Success and result: 0x00000000</code></pre>
+      </div>
+      <p>Now our eBPF program and kprobe captures the struct data members and the Python script prints out the following data:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">text</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-text">sudo cat /sys/kernel/debug/tracing/trace_pipe
+...
+            nvme-4946    [004] d..31  2026.971492: bpf_trace_printk: KPROBE ENTRY pid = 4946, comm = nvme, opcode = 14, command_id = 0, nsid = 1, cdw10 = 1
+</code></pre>
+      </div>
+      <p>Opcode 0x14 (HEX) means "Device Self-test" according to "NVM Express Base Specification Revision 2.0a" "Figure 138: Opcodes for Admin Commands". cdw10 Command Dword 10 is a command specific field. Namespace ID is 0x1.</p>
+
+      <h2>Related Documents</h2>
+      <p><strong>Related Documents</strong></p>
+      <ul>
+        <li>blog: <a href="https://nakryiko.com" target="_blank">Andrii Nakryiko's Blog</a></li>
+        <li>book: <a href="https://www.oreilly.com/library/view/learning-ebpf/9781098135119/" target="_blank">Liz Rice - Learning eBPF</a></li>
+        <li>book: <a href="https://www.oreilly.com/library/view/linux-observability-with/9781492050193/" target="_blank">David Calavera, Lorenzo Fontana - Linux Observability with BPF</a></li>
+        <li>tutorial: <a href="https://mdaverde.com/posts/cap-bpf/" target="_blank">Introduction to CAP_BPF</a></li>
+        <li>specification: <a href="https://nvmexpress.org/wp-content/uploads/NVMe-NVM-Express-2.0a-2021.07.26-Ratified.pdf" target="_blank">NVM Express Base Specification Revision 2.0a</a></li>
+        <li>manual: <a href="https://manpages.ubuntu.com/manpages/lunar/en/man1/nvme.1.html" target="_blank">nvme</a></li>
+        <li>manual: <a href="https://manpages.ubuntu.com/manpages/lunar/man1/nvme-admin-passthru.1.html" target="_blank">nvme-admin-passthru</a></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <p>© <script>document.write(new Date().getFullYear())</script> Kernelize. All rights reserved.</p>
+    </div>
+  </footer>
+  <script src="script.js" defer></script>
+</body>
+</html>

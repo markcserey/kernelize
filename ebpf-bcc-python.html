@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Learn how to write an eBPF program using the BCC framework and Python to trace NVMe driver data structures.">
+  <meta name="keywords" content="eBPF, BCC, Python, NVMe, Linux kernel, tracing">
+  <meta property="og:title" content="Kernelize - eBPF Program Using the BCC Framework Loaded with Python Script">
+  <meta property="og:description" content="Learn how to write an eBPF program using the BCC framework and Python to trace NVMe driver data structures.">
+  <meta property="og:url" content="https://your-site-url.com/ebpf-bcc-python.html">
+  <meta property="og:type" content="article">
+  <link rel="icon" href="images/favicon.ico" type="image/x-icon">
+  <link rel="shortcut icon" href="images/favicon.ico" type="image/x-icon">
+  <title>eBPF Program Using the BCC Framework Loaded with Python Script</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.0/styles/atom-one-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.0/highlight.min.js"></script>
+  <script>hljs.highlightAll();</script>
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="container">
+      <a href="index.html" class="logo">
+        <img src="images/logo.svg" alt="Kernelize Logo">
+        <span class="logo-text">Kernelize</span>
+      </a>
+      <button class="menu-toggle" aria-label="Toggle navigation">
+        <span class="hamburger"></span>
+      </button>
+      <nav class="nav">
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="about.html">About</a></li>
+          <li><a href="contact.html">Contact</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Article Section -->
+  <section class="article">
+    <div class="container">
+      <h1>eBPF Program Using the BCC Framework Loaded with Python Script</h1>
+
+      <h2>Introduction</h2>
+      <p>What is the most easiest way you can start writing eBPF programs? How you can write an easy eBPF program which can trace specific Data Structure members in the Kernel used by Kernel functions, and how can you attach this eBPF program of yours to specific events, syscalls and kernel functions that you aim to trace?</p>
+      <p>There are several different libraries and frameworks that you can use to write eBPF applications. The most easiest and most accessible way to write an eBPF program from scratch is to use the BCC Python Framework.</p>
+      <p>The BCC project at <a href="https://github.com/iovisor/bcc" target="_blank">https://github.com/iovisor/bcc</a> contains a great number of CLI tools for tracing the Linux system and Kernel, the tools directory contains a lot of Python-based eBPF examples <a href="https://github.com/iovisor/bcc/tree/master/tools" target="_blank">https://github.com/iovisor/bcc/tree/master/tools</a>.</p>
+      <p>Although BCC was the first popular project for implementing eBPF programs, providing framework for both user space and kernel space aspect, this way making eBPF development relatively easy for programmers without much kernel experience, still it is not recommended for production level eBPF development, but it is awesome for taking the first steps in eBPF development.</p>
+      <p>eBPF programs can be used to dynamically change the behavior of the system, the eBPF code starts taking effect as soon as it is attached to an event which can be a syscall or kernel function.</p>
+      <p>The main objective of this article is to teach you how to write an eBPF program in the possibly most easiest way, still I would like to give you a bit more serious example, where we trace the Kernel Data Structure members used by a Kernel function.</p>
+
+      <h2>Writing the Python Application with eBPF Program</h2>
+      <p>I have a Python application which contains the eBPF program and it's using the BCC framework to compile and load it into the Kernel:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">python</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-python">vi kprobe_nvme.py
+--------------------------------------------------------------------
+#!/usr/bin/python
+
+from bcc import BPF
+from bcc.utils import printb
+from time import strftime
+
+# define BPF program
+bpf_text = """
+
+#include <linux/blkdev.h>
+#include <linux/stddef.h>
+
+struct data_t {
+    u32 pid;
+    char comm[TASK_COMM_LEN];
+    u8 opcode;
+    u16 command_id;
+    u32 nsid;
+    u32 cdw10;
+};
+
+struct nvme_sgl_desc {
+        __le64  addr;
+        __le32  length;
+        __u8    rsvd[3];
+        __u8    type;
+};
+
+struct nvme_keyed_sgl_desc {
+        __le64  addr;
+        __u8    length[3];
+        __u8    key[4];
+        __u8    type;
+};
+
+union nvme_data_ptr {
+        struct {
+                __le64  prp1;
+                __le64  prp2;
+        };
+        struct nvme_sgl_desc    sgl;
+        struct nvme_keyed_sgl_desc ksgl;
+};
+
+struct nvme_common_command {
+        __u8                    opcode;
+        __u8                    flags;
+        __u16                   command_id;
+        __le32                  nsid;
+        __le32                  cdw2[2];
+        __le64                  metadata;
+        union nvme_data_ptr     dptr;
+        struct_group(cdws,
+        __le32                  cdw10;
+        __le32                  cdw11;
+        __le32                  cdw12;
+        __le32                  cdw13;
+        __le32                  cdw14;
+        __le32                  cdw15;
+        );
+};
+
+struct nvme_command {
+    union {
+        struct nvme_common_command common;
+    };
+};
+
+BPF_PERCPU_ARRAY(unix_data, struct data_t, 1);
+BPF_PERF_OUTPUT(events);
+
+int trace_nvme_submit_user_cmd(struct pt_regs *ctx,
+                               void *q,
+                               struct nvme_command *cmd
+                              )
+{
+    struct data_t data = {};
+
+    u64 id =  bpf_get_current_pid_tgid();
+    u32 pid = id >> 32;                     // PID is higher part
+    data.pid = pid;
+
+    // get current process name
+    bpf_get_current_comm(&data.comm, sizeof(data.comm));
+   
+    __u8 a_opcode;
+    bpf_probe_read_kernel(&a_opcode, sizeof(a_opcode), &cmd->common.opcode);
+    data.opcode = a_opcode; 
+
+    __u16 a_command_id;
+    bpf_probe_read_kernel(&a_command_id, sizeof(a_command_id), &cmd->common.command_id);
+    data.command_id = a_command_id;
+
+    __le32 a_nsid;
+    bpf_probe_read_kernel(&a_nsid, sizeof(a_nsid), &cmd->common.nsid);
+    data.nsid = a_nsid;
+
+    __le32 a_cdw10;
+    bpf_probe_read_kernel(&a_cdw10, sizeof(a_cdw10), &cmd->common.cdws.cdw10);
+    data.cdw10 = a_cdw10;
+
+    events.perf_submit(ctx, &data, sizeof(data));
+ 
+    return 0;
+}
+"""
+
+# process event
+def print_event(cpu, data, size):
+    event = b["events"].event(data)
+    print("%-9s %-9s %-7s %-8x %-12x %-6x %-6x" % (
+           strftime("%H:%M:%S"),
+           event.comm,
+           event.pid,
+           event.opcode,
+           event.command_id,
+           event.nsid,
+           event.cdw10,
+           ))
+
+# initialize BPF
+b = BPF(text=bpf_text)
+b.attach_kprobe(event="nvme_submit_user_cmd", fn_name="trace_nvme_submit_user_cmd")
+
+# header
+print("%-9s %-9s %-7s %-8s %-12s %-6s %-6s" % (
+      "TIME", "COMM", "PID", "OPCODE", "COMMAND-ID", "NSID", "CDW10"))
+
+# read events
+# loop with callback to print_event
+b["events"].open_perf_buffer(print_event, page_cnt=64)
+while 1:
+    try:
+        b.perf_buffer_poll(timeout=1000)
+    except KeyboardInterrupt:
+        exit()
+--------------------------------------------------------------------</code></pre>
+      </div>
+      <p>More specifically our Python code will load the wrapped eBPF program written in C, into the Kernel and will attach a kprobe to trace "nvme_submit_user_cmd" NVMe Kernel driver function.</p>
+      <p>We have to install nvme-cli so we can trigger the invocation of this "nvme_submit_user_cmd" kernel function.</p>
+      <p>Now let's install nvme-cli in order to send an admin command to one of the NVME SSD devices:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo apt install nvme-cli</code></pre>
+      </div>
+
+      <h2>Analyzing the nvme_submit_user_cmd Function</h2>
+      <p>Now let's see in the Kernel code how does the "nvme_submit_user_cmd" function definition look like, what arguments does it have and what can we extract from these arguments which are passed to the "nvme_submit_user_cmd" function.</p>
+      <p>We can see in the Kernel source that it has a number of arguments and the second argument is a pointer of type "struct nvme_command":</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">c</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-c">drivers/nvme/host/ioctl.c:141
+
+static int nvme_submit_user_cmd(struct request_queue *q,
+                struct nvme_command *cmd, u64 ubuffer,
+                unsigned bufflen, void __user *meta_buffer, unsigned meta_len,
+                u32 meta_seed, u64 *result, unsigned timeout, bool vec)</code></pre>
+      </div>
+      <p>Let's check in the Kernel source code what members does the "struct nvme_command" have?</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">c</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-c">grep -rnI "struct nvme_command {" kernel_src/
+include/linux/nvme.h:1531
+
+struct nvme_command {
+        union {
+                struct nvme_common_command common;
+                struct nvme_rw_command rw;
+                struct nvme_identify identify;
+                struct nvme_features features;
+                struct nvme_create_cq create_cq;
+                struct nvme_create_sq create_sq;
+                struct nvme_delete_queue delete_queue;
+                struct nvme_download_firmware dlfw;
+                struct nvme_format_cmd format;
+                struct nvme_dsm_cmd dsm;
+                struct nvme_write_zeroes_cmd write_zeroes;
+                struct nvme_zone_mgmt_send_cmd zms;
+                struct nvme_zone_mgmt_recv_cmd zmr;
+                struct nvme_abort_cmd abort;
+                struct nvme_get_log_page_command get_log_page;
+                struct nvmf_common_command fabrics;
+                struct nvmf_connect_command connect;
+                struct nvmf_property_set_command prop_set;
+                struct nvmf_property_get_command prop_get;
+                struct nvme_dbbuf dbbuf;
+                struct nvme_directive_cmd directive;
+        };
+};</code></pre>
+      </div>
+      <p>Within "struct nvme_command" we would like to access the "struct nvme_common_command common" member. Now let's check the layout of the "struct nvme_common_command" data structure in the Kernel source code:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">c</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-c">grep -rnI "struct nvme_common_command {" kernel_src/
+
+./include/linux/nvme.h:901
+
+struct nvme_common_command {
+        __u8                    opcode;
+        __u8                    flags;
+        __u16                   command_id;
+        __le32                  nsid;
+        __le32                  cdw2[2];
+        __le64                  metadata;
+        union nvme_data_ptr     dptr;
+        struct_group(cdws,
+        __le32                  cdw10;
+        __le32                  cdw11;
+        __le32                  cdw12;
+        __le32                  cdw13;
+        __le32                  cdw14;
+        __le32                  cdw15;
+        );
+};</code></pre>
+      </div>
+      <p>"struct nvme_common_command" has this "opcode" member plus a number of other member like command_id, nsid (Namespace ID), cdw10 (Command Dword 10 is an NVMe command specific field) which values we want to trace with our eBPF program.</p>
+
+      <h2>Loading and Running the Program</h2>
+      <p>Now let's load the eBPF program into the Kernel. The Python script using the BCC Python Framework will load our eBPF program, for that we need to run the python script with sudo:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo ./kprobe_nvme.py</code></pre>
+      </div>
+      <p>As soon as we start executing the nvme-cli tool to list NVMe devices on the system:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo nvme list
+Node                  Generic               SN                   Model                                    Namespace Usage                      Format           FW Rev  
+--------------------- --------------------- -------------------- ---------------------------------------- --------- -------------------------- ---------------- --------
+/dev/nvme0n1          /dev/ng0n1            S4DYNX0R756769       SAMSUNG MZVLB512HBJQ-000L2               1          93.05  GB / 512.11  GB    512   B +  0 B   3L1QEXF7
+</code></pre>
+      </div>
+      <p>The "nvme_submit_user_cmd" function is invoked in the NVMe Kernel driver level, and the kprobe attached by our eBPF program will trace the NVMe data structure members that we are hooked onto, opcode, command-id, nsid, cdw10:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">text</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-text">sudo ./kprobe_nvme.py 
+TIME      COMM      PID     OPCODE   COMMAND-ID   NSID   CDW10 
+02:34:13  b'nvme'   32086   6        0            1      0     
+02:34:13  b'nvme'   32086   6        0            1      3     
+</code></pre>
+      </div>
+      <p>This means that the nvme-cli tool triggers the "nvme_submit_user_cmd" nvme kernel driver function 2 times, same opcode, 0x6 (HEX) which in terms of NVMe admin commands it means "Identify".</p>
+
+      <h2>Testing with an NVMe Admin Command</h2>
+      <p>Now let's run an NVME admin passthru command to trigger a short device self-test in the NVME SSD:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo nvme admin-passthru /dev/nvme0 -n 0x1 --opcode=0x14 --cdw10=0x1 -r
+Admin Command Device Self-test is Success and result: 0x00000000</code></pre>
+      </div>
+      <p>Now our eBPF program and kprobe captures the struct data members and the Python script prints out the following data:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">text</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-text">sudo ./kprobe_nvme.py 
+TIME      COMM      PID     OPCODE   COMMAND-ID   NSID   CDW10 
+...
+02:34:47  b'nvme'   32094   14       0            1      1   </code></pre>
+      </div>
+      <p>Opcode 0x14 (HEX) means "Device Self-test" according to "NVM Express Base Specification Revision 2.0a" "Figure 138: Opcodes for Admin Commands". cdw10 Command Dword 10 is a command specific field. Namespace ID is 0x1.</p>
+
+      <h2>Conclusion</h2>
+      <p>So in conclusion we were able to capture these Data Structure members of "nvme_common_command" structure embedded in the "nvme_command" structure just by writing a simple eBPF program which is built and loaded into the Kernel using a Python script and BCC framework, and it's attached to the kprobe of the "nvme_submit_user_cmd" function, and whenever the "nvme-cli" utility triggers the "nvme_submit_user_cmd" function on the NVMe Kernel driver level, the eBPF program, writes a line of trace into a perf buffer and the Python program reads the trace message from the perf buffer and displays it to the user.</p>
+      <p>For this we use the BPF_PERF_OUTPUT BCC macro, which let you write data in a structure of your choosing into a perf ring buffer map.</p>
+      <p>BCC defines the macro BPF_PERF_OUTPUT for creating a map that will be used to pass messages from the kernel to user space.</p>
+
+      <h2>Related Documents</h2>
+      <p><strong>Related Documents</strong></p>
+      <ul>
+        <li>reference guide: <a href="https://github.com/iovisor/bcc/blob/master/docs/reference_guide.md" target="_blank">bcc Reference Guide</a></li>
+        <li>tutorial: <a href="https://github.com/iovisor/bcc/blob/master/docs/tutorial_bcc_python_developer.md" target="_blank">bcc Python Developer Tutorial</a></li>
+        <li>tutorial: <a href="https://mdaverde.com/posts/cap-bpf/" target="_blank">Introduction to CAP_BPF</a></li>
+        <li>examples: <a href="https://github.com/iovisor/bcc/tree/master/tools" target="_blank">bcc eBPF python examples</a></li>
+        <li>specification: <a href="https://nvmexpress.org/wp-content/uploads/NVMe-NVM-Express-2.0a-2021.07.26-Ratified.pdf" target="_blank">NVM Express Base Specification Revision 2.0a</a></li>
+        <li>manual: <a href="https://manpages.ubuntu.com/manpages/lunar/en/man1/nvme.1.html" target="_blank">nvme</a></li>
+        <li>manual: <a href="https://manpages.ubuntu.com/manpages/lunar/man1/nvme-admin-passthru.1.html" target="_blank">nvme-admin-passthru</a></li>
+        <li>blog: <a href="https://nakryiko.com" target="_blank">Andrii Nakryiko's Blog</a></li>
+        <li>book: <a href="https://www.oreilly.com/library/view/learning-ebpf/9781098135119/" target="_blank">Liz Rice - Learning eBPF</a></li>
+        <li>book: <a href="https://www.oreilly.com/library/view/linux-observability-with/9781492050193/" target="_blank">David Calavera, Lorenzo Fontana - Linux Observability with BPF</a></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <p>© <script>document.write(new Date().getFullYear())</script> Kernelize. All rights reserved.</p>
+    </div>
+  </footer>
+  <script src="script.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Learn how to use bpftrace to write an eBPF oneliner for tracing NVMe driver data structure members.">
+  <meta name="keywords" content="eBPF, bpftrace, NVMe, Linux kernel, tracing, oneliner">
+  <meta property="og:title" content="Kernelize - eBPF Oneliner with bpftrace for Tracing NVMe Driver Data Structure Members">
+  <meta property="og:description" content="Learn how to use bpftrace to write an eBPF oneliner for tracing NVMe driver data structure members.">
+  <meta property="og:url" content="https://your-site-url.com/ebpf-bpftrace-oneliner.html">
+  <meta property="og:type" content="article">
+  <link rel="icon" href="images/favicon.ico" type="image/x-icon">
+  <link rel="shortcut icon" href="images/favicon.ico" type="image/x-icon">
+  <title>eBPF Oneliner with bpftrace for Tracing NVMe Driver Data Structure Members</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.0/styles/atom-one-dark.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.5.0/highlight.min.js"></script>
+  <script>hljs.highlightAll();</script>
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="container">
+      <a href="index.html" class="logo">
+        <img src="images/logo.svg" alt="Kernelize Logo">
+        <span class="logo-text">Kernelize</span>
+      </a>
+      <button class="menu-toggle" aria-label="Toggle navigation">
+        <span class="hamburger"></span>
+      </button>
+      <nav class="nav">
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="about.html">About</a></li>
+          <li><a href="contact.html">Contact</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Article Section -->
+  <section class="article">
+    <div class="container">
+      <h1>eBPF Oneliner with bpftrace for Tracing NVMe Driver Data Structure Members</h1>
+
+      <h2>Introduction</h2>
+      <p>Tracing the Kernel and Kernel driver data is crucial when you need to analyze complex scenarios, performance issues, or driver issues.</p>
+      <p>bpftrace is a tool that provides a high level language that you can use to easily write eBPF programs for tracing Kernel data. bpftrace is built on top of BCC and the bpftrace scripts written in this high level language get converted into BCC programs which are then compiled at runtime using the LLVM and Clang toolchain. You can use bpftrace to write eBPF one-liners or short eBPF programs. Although bpftrace high level language is limited and cannot be used to write complex eBPF programs, there are still a lot scenarios where bpftrace comes handy. bpftrace contains a lot of built-in functionality for aggregating information and creating histograms. bpftrace converts programs written in the high-level language into eBPF kernel code and also provides some output formatting functionality that can be very useful to effectively show tracing results in the terminal. With bpftrace you can attach to tracing events such as kprobes, uprobes and tracepoints.</p>
+      <p>You can list all the tracing events that bpftrace is able to attach with:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo bpftrace -l</code></pre>
+      </div>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">man bpftrace
+    -l [search]    list probes</code></pre>
+      </div>
+      <p>For example to list all the NVME driver commands:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo bpftrace -l | grep nvme.*cmd
+
+kfunc:nvme_core:__traceiter_nvme_setup_cmd
+kfunc:nvme_core:nvme_cleanup_cmd
+kfunc:nvme_core:nvme_cmd_allowed
+kfunc:nvme_core:nvme_dev_uring_cmd
+kfunc:nvme_core:nvme_ns_chr_uring_cmd
+kfunc:nvme_core:nvme_ns_chr_uring_cmd_iopoll
+kfunc:nvme_core:nvme_ns_head_chr_uring_cmd
+kfunc:nvme_core:nvme_ns_head_chr_uring_cmd_iopoll
+kfunc:nvme_core:nvme_ns_uring_cmd
+kfunc:nvme_core:nvme_setup_cmd
+kfunc:nvme_core:nvme_submit_sync_cmd
+kfunc:nvme_core:nvme_trace_parse_admin_cmd
+kfunc:nvme_core:nvme_trace_parse_fabrics_cmd
+kfunc:nvme_core:nvme_trace_parse_nvm_cmd
+kfunc:nvme_core:nvme_uring_cmd_end_io
+kfunc:nvme_core:nvme_uring_cmd_end_io_meta
+kfunc:nvme_core:nvme_uring_cmd_io
+kfunc:nvme_core:nvme_user_cmd64
+kprobe:__nvme_submit_sync_cmd
+kprobe:__traceiter_nvme_setup_cmd
+kprobe:nvme_cleanup_cmd
+kprobe:nvme_cmd_allowed
+kprobe:nvme_dev_uring_cmd
+kprobe:nvme_ns_chr_uring_cmd
+kprobe:nvme_ns_chr_uring_cmd_iopoll
+kprobe:nvme_ns_head_chr_uring_cmd
+kprobe:nvme_ns_head_chr_uring_cmd_iopoll
+kprobe:nvme_ns_uring_cmd
+kprobe:nvme_setup_cmd
+kprobe:nvme_submit_sync_cmd
+kprobe:nvme_submit_user_cmd
+kprobe:nvme_trace_parse_admin_cmd
+kprobe:nvme_trace_parse_fabrics_cmd
+kprobe:nvme_trace_parse_nvm_cmd
+kprobe:nvme_uring_cmd_end_io
+kprobe:nvme_uring_cmd_end_io_meta
+kprobe:nvme_uring_cmd_io
+kprobe:nvme_user_cmd.constprop.0
+kprobe:nvme_user_cmd64
+tracepoint:nvme:nvme_setup_cmd</code></pre>
+      </div>
+      <p>As an example we will attach a kprobe to the "nvme_submit_user_cmd" function in order to capture some data structure members, one of the arguments of the function which has a specific NVME data structure type.</p>
+
+      <h2>Setting Up bpftrace</h2>
+      <p>First you need to install bpftrace with:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo apt install bpftrace</code></pre>
+      </div>
+
+      <h2>Analyzing the nvme_submit_user_cmd Function</h2>
+      <p>Now let's see in the Kernel code how does the "nvme_submit_user_cmd" function definition look like, what arguments does it have and what can we extract from these arguments which are passed to the "nvme_submit_user_cmd" function.</p>
+      <p>We can see in the Kernel source that it has a number of arguments and second argument is a pointer of type "struct nvme_command":</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">c</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-c">drivers/nvme/host/ioctl.c:141
+
+static int nvme_submit_user_cmd(struct request_queue *q,
+                struct nvme_command *cmd, u64 ubuffer,
+                unsigned bufflen, void __user *meta_buffer, unsigned meta_len,
+                u32 meta_seed, u64 *result, unsigned timeout, bool vec)</code></pre>
+      </div>
+      <p>Let's check what members does the "struct nvme_command" have?</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">c</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-c">grep -rnI "struct nvme_command {" kernel_src/
+
+include/linux/nvme.h:1531
+
+struct nvme_command {
+        union {
+                struct nvme_common_command common;
+                struct nvme_rw_command rw;
+                struct nvme_identify identify;
+                struct nvme_features features;
+                struct nvme_create_cq create_cq;
+                struct nvme_create_sq create_sq;
+                struct nvme_delete_queue delete_queue;
+                struct nvme_download_firmware dlfw;
+                struct nvme_format_cmd format;
+                struct nvme_dsm_cmd dsm;
+                struct nvme_write_zeroes_cmd write_zeroes;
+                struct nvme_zone_mgmt_send_cmd zms;
+                struct nvme_zone_mgmt_recv_cmd zmr;
+                struct nvme_abort_cmd abort;
+                struct nvme_get_log_page_command get_log_page;
+                struct nvmf_common_command fabrics;
+                struct nvmf_connect_command connect;
+                struct nvmf_property_set_command prop_set;
+                struct nvmf_property_get_command prop_get;
+                struct nvme_dbbuf dbbuf;
+                struct nvme_directive_cmd directive;
+        };
+};</code></pre>
+      </div>
+      <p>Within "struct nvme_command" we would like to access the "struct nvme_common_command common" member. Now let's check the layout of the "struct nvme_common_command" data structure in the Kernel code:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">c</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-c">grep -rnI "struct nvme_common_command {" kernel_src/
+
+./include/linux/nvme.h:901
+
+struct nvme_common_command {
+        __u8                    opcode;
+        __u8                    flags;
+        __u16                   command_id;
+        __le32                  nsid;
+        __le32                  cdw2[2];
+        __le64                  metadata;
+        union nvme_data_ptr     dptr;
+        struct_group(cdws,
+        __le32                  cdw10;
+        __le32                  cdw11;
+        __le32                  cdw12;
+        __le32                  cdw13;
+        __le32                  cdw14;
+        __le32                  cdw15;
+        );
+};</code></pre>
+      </div>
+      <p>"struct nvme_common_command" has this "opcode" member which value we want to capture using bpftrace.</p>
+
+      <h2>Writing the bpftrace Oneliner</h2>
+      <p>Now let's write the bpftrace oneliner using the high level language provided by bpftrace:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo bpftrace -e 'kprobe:nvme_submit_user_cmd { 
+printf("opcode: %x\n", ((struct nvme_command *)arg1)->common.opcode);
+printf("command_id: %x\n", ((struct nvme_command *)arg1)->common.command_id); 
+printf("nsid: %x\n", ((struct nvme_command *)arg1)->common.nsid); 
+printf("cdw10: %x\n", ((struct nvme_command *)arg1)->common.cdw10); 
+}'</code></pre>
+      </div>
+      <p>As you can see the oneliner attaches a kprobe to the "nvme_submit_user_cmd" function.</p>
+      <p>arg0 is the first argument, arg1 is the second argument and so on and so forth...</p>
+      <p>So in order to refer to the second argument of the "nvme_submit_user_cmd" function, that is "struct nvme_command *cmd" we must write arg1 in the oneliner.</p>
+      <p>We have to do typecasting of arg1 to "struct nvme_command" pointer as in the function signature, since arg1 is the second argument which takes a pointer to "struct nvme_command". Also in order to access the data members of pointer "struct nvme_command" we use the arrow operator just like in C/C++ and since "nvme_command" has a data member called "common" which is of type "struct nvme_common_command" and not a pointer then we use the dot operator to access all of "nvme_common_command" data members.</p>
+      <p>"-e" parameter in bpftrace means that we wish bpftrace to execute this or that eBPF program:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">man bpftrace
+    -e 'program'   execute this program</code></pre>
+      </div>
+
+      <h2>Testing the Oneliner</h2>
+      <p>Now let's install nvme-cli in order to send an admin command to one of the NVME SSD devices:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo apt install nvme-cli</code></pre>
+      </div>
+      <p>Then start running the eBPF oneliner through bpftrace:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo bpftrace -e 'kprobe:nvme_submit_user_cmd { 
+printf("opcode: %x\n", ((struct nvme_command *)arg1)->common.opcode);
+printf("command_id: %x\n", ((struct nvme_command *)arg1)->common.command_id); 
+printf("nsid: %x\n", ((struct nvme_command *)arg1)->common.nsid); 
+printf("cdw10: %x\n", ((struct nvme_command *)arg1)->common.cdw10); 
+}'
+Attaching 1 probe...</code></pre>
+      </div>
+      <p>Here the printout says that 1 kprobe is now attached.</p>
+      <p>And we can also check this fact with:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo cat /sys/kernel/debug/kprobes/list
+ffffffffc077a380  k  nvme_submit_user_cmd+0x0  nvme_core [FTRACE]</code></pre>
+      </div>
+      <p>Now let's list the NVME devices:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo nvme list
+Node                  Generic               SN                   Model                                    Namespace Usage                      Format           FW Rev  
+--------------------- --------------------- -------------------- ---------------------------------------- --------- -------------------------- ---------------- --------
+/dev/nvme0n1          /dev/ng0n1            S4DYNX0R756769       SAMSUNG MZVLB512HBJQ-000L2               1          94.17  GB / 512.11  GB    512   B +  0 B   3L1QEXF7</code></pre>
+      </div>
+      <p>As soon as we shuffle the nvme-cli command, bpftrace is capturing and printing the following data:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo bpftrace -e 'kprobe:nvme_submit_user_cmd { 
+printf("opcode: %x\n", ((struct nvme_command *)arg1)->common.opcode);
+printf("command_id: %x\n", ((struct nvme_command *)arg1)->common.command_id); 
+printf("nsid: %x\n", ((struct nvme_command *)arg1)->common.nsid); 
+printf("cdw10: %x\n", ((struct nvme_command *)arg1)->common.cdw10); 
+}'
+Attaching 1 probe...</code></pre>
+      </div>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">text</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-text">opcode: 6
+command_id: 0
+nsid: 1
+cdw10: 0
+
+opcode: 6
+command_id: 0
+nsid: 1
+cdw10: 3</code></pre>
+      </div>
+      <p>This means that the nvme-cli tool triggers the "nvme_submit_user_cmd" nvme kernel driver function 2 times, same opcode, 0x6 (HEX) which in terms of NVMe admin commands it means "Identify".</p>
+      <p>Now let's run an NVME admin passthru command to trigger a short device self-test in the NVME SSD:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">bash</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-bash">sudo nvme admin-passthru /dev/nvme0 -n 0x1 --opcode=0x14 --cdw10=0x1 -r
+
+Admin Command Device Self-test is Success and result: 0x00000000</code></pre>
+      </div>
+      <p>Now bpftrace captures and prints out the following data:</p>
+      <div class="code-snippet">
+        <div class="code-header">
+          <span class="language-label">text</span>
+          <button class="copy-btn">
+            <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>
+            </svg>
+          </button>
+        </div>
+        <pre><code class="language-text">opcode: 14
+command_id: 0
+nsid: 1
+cdw10: 1</code></pre>
+      </div>
+      <p>Opcode 0x14 (HEX) means "Device Self-test" according to "NVM Express Base Specification Revision 2.0a" "Figure 138: Opcodes for Admin Commands". cdw10 Command Dword 10 is a command specific field. Namespace ID is 0x1.</p>
+
+      <h2>Conclusion</h2>
+      <p>So in conclusion we were able to capture these Data Structure members of "nvme_common_command" structure embedded in the "nvme_command" structure just by writing a simple eBPF one-liner program and load it through bpftrace as a kprobe attached to the "nvme_submit_user_cmd" function.</p>
+
+      <h2>Related Documents</h2>
+      <p><strong>Related Documents:</strong></p>
+      <ul>
+        <li>specification: <a href="https://nvmexpress.org/wp-content/uploads/NVMe-NVM-Express-2.0a-2021.07.26-Ratified.pdf" target="_blank">NVM Express Base Specification Revision 2.0a</a></li>
+        <li>reference guide: <a href="https://github.com/iovisor/bpftrace/blob/master/docs/reference_guide.md" target="_blank">bpftrace Reference Guide</a></li>
+        <li>manual: <a href="https://manpages.ubuntu.com/manpages/lunar/en/man1/nvme.1.html" target="_blank">nvme</a></li>
+        <li>manual: <a href="https://manpages.ubuntu.com/manpages/lunar/man1/nvme-admin-passthru.1.html" target="_blank">nvme-admin-passthru</a></li>
+        <li>tutorial: <a href="https://github.com/iovisor/bpftrace/blob/master/docs/tutorial_one_liners.md" target="_blank">The bpftrace One-Liner Tutorial</a></li>
+        <li>cheat sheet: <a href="https://www.brendangregg.com/BPF/bpftrace-cheat-sheet.html" target="_blank">bpftrace Cheat Sheet</a></li>
+        <li>intro: <a href="https://www.brendangregg.com/blog/2019-08-19/bpftrace.html" target="_blank">Brendan Gregg - A thorough introduction to bpftrace</a></li>
+        <li>blog: <a href="https://nakryiko.com" target="_blank">Andrii Nakryiko's Blog</a></li>
+        <li>book: <a href="https://www.oreilly.com/library/view/learning-ebpf/9781098135119/" target="_blank">Liz Rice - Learning eBPF</a></li>
+        <li>book: <a href="https://www.oreilly.com/library/view/linux-observability-with/9781492050193/" target="_blank">David Calavera, Lorenzo Fontana - Linux Observability with BPF</a></li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="container">
+      <p>© <script>document.write(new Date().getFullYear())</script> Kernelize. All rights reserved.</p>
+    </div>
+  </footer>
+  <script src="script.js" defer></script>
+</body>
+</html>
